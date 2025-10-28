@@ -12,6 +12,7 @@
     "test": "node tests/test_basic.js",
     "sync": "node scripts/sync_db.js",
     "sync:init": "node scripts/sync_db.js --init",
+    "sync:remote": "node scripts/sync_db.js --set-remote",
     "sync:status": "node scripts/sync_db.js --status",
     "sync:pull": "node scripts/sync_db.js --pull",
     "sync:push": "node scripts/sync_db.js --push"
