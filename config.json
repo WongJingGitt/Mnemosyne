@@ -1,0 +1,16 @@
+{
+  "database": {
+    "path": null,
+    "comment": "留空将使用 ~/.mnemosyne/memory.db 作为默认路径"
+  },
+  "server": {
+    "name": "personal-memory-server",
+    "version": "1.0.0",
+    "default_user_id": "default"
+  },
+  "features": {
+    "enable_entity_relations": true,
+    "max_events_per_query": 100,
+    "auto_backup": false
+  }
+}
