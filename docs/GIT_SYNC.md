@@ -4,6 +4,85 @@
 
 本文档描述如何通过 Git 私有仓库实现 Mnemosyne 数据库的跨设备同步。这是一个额外的可选功能，允许你在多台设备之间同步个人记忆数据。
 
+## 快速开始
+
+### 完整工作流程
+
+```bash
+# 1️⃣  初始化 Git 同步环境（仅首次）
+npm run sync:init
+
+# 2️⃣  绑定远程仓库
+npm run sync:remote https://github.com/username/mnemosyne-data.git
+
+# 3️⃣  首次推送数据到远程
+npm run sync:push
+
+# 4️⃣  日常使用 - 自动双向同步
+npm run sync
+```
+
+### 在其他设备上设置
+
+```bash
+# 1️⃣  安装并运行 Mnemosyne（会创建 ~/.mnemosyne 目录）
+npm start
+
+# 2️⃣  克隆远程数据（会覆盖本地数据库）
+cd ~/.mnemosyne
+git init
+git remote add origin https://github.com/username/mnemosyne-data.git
+git pull origin main
+
+# 3️⃣  添加安全目录（Windows 可能需要）
+git config --global --add safe.directory ~/.mnemosyne
+
+# 4️⃣  日常同步
+npm run sync
+```
+
+## 可用命令
+
+### 初始化命令
+
+```bash
+# 初始化完整的 Git 环境（创建仓库、.gitignore、初始提交）
+npm run sync:init
+
+# 设置或更新远程仓库地址
+npm run sync:remote <远程仓库URL>
+
+# 示例
+npm run sync:remote https://github.com/username/mnemosyne-data.git
+npm run sync:remote git@github.com:username/mnemosyne-data.git
+```
+
+### 同步命令
+
+```bash
+# 双向同步（推荐）- 先拉取，再推送
+npm run sync
+
+# 仅推送本地更改到远程
+npm run sync:push
+
+# 仅从远程拉取更新
+npm run sync:pull
+
+# 查看同步状态
+npm run sync:status
+```
+
+### 高级选项
+
+```bash
+# 强制同步（覆盖本地更改，谨慎使用！）
+npm run sync -- --force
+
+# 查看帮助信息
+node scripts/sync_db.js --help
+```
+
 ## 方案设计
 
 ### 架构
@@ -24,7 +103,7 @@
 2. **定期同步**: 自动或手动提交和拉取更新
 3. **冲突处理**: 使用时间戳或合并策略解决冲突
 
-## 实现步骤
+## 详细步骤
 
 ### 1. 创建 Git 私有仓库
 
@@ -34,20 +113,28 @@
 # 示例：在 GitHub 上
 # 1. 访问 https://github.com/new
 # 2. 创建私有仓库：mnemosyne-data
-# 3. 不要初始化 README 或 .gitignore
+# 3. 不要初始化 README 或 .gitignore（让我们的脚本来创建）
 ```
 
-### 2. 初始化本地数据仓库
+### 2. 初始化本地环境
+
+**使用自动化脚本（推荐）：**
 
 ```bash
-# 创建数据目录
-cd ~/.mnemosyne
-git init
+# 一键初始化
+npm run sync:init
+```
 
-# 创建 .gitignore（排除临时文件）
-cat > .gitignore << EOF
-*.db-shm
-*.db-wal
+这个命令会自动完成：
+- ✅ 初始化 Git 仓库
+- ✅ 创建 .gitignore 文件
+- ✅ 创建初始提交
+- ✅ 设置默认分支为 main
+- ✅ 配置 Git 用户信息
+
+**手动初始化（可选）：**
+
+```bash
 .DS_Store
 Thumbs.db
 EOF
