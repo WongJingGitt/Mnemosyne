@@ -100,6 +100,37 @@ class MemoryMCPServer {
               required: ['key'],
             },
           },
+          {
+            name: 'search_profile_by_keywords',
+            description: '通过关键词搜索用户个人信息。⚠️ 重要：调用此工具前，请先分析用户输入并提取核心关键词。例如用户说"我的公司全称"，应提取关键词 ["公司", "全称"]；用户说"我在哪里工作"，应提取关键词 ["工作", "公司", "地点"]。支持同义词扩展，如"车"可扩展为["车", "汽车", "vehicle"]。',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                keywords: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: '关键词数组，由 AI 从用户输入中提取的核心词汇。应包含同义词和相关词以提高召回率',
+                },
+                category: {
+                  type: 'string',
+                  enum: ['basic_info', 'preferences', 'habits'],
+                  description: '可选：按分类过滤结果',
+                },
+                match_mode: {
+                  type: 'string',
+                  enum: ['any', 'all'],
+                  default: 'any',
+                  description: '匹配模式：any=任一关键词匹配（推荐），all=所有关键词都匹配',
+                },
+                limit: {
+                  type: 'integer',
+                  default: 20,
+                  description: '返回结果数量限制',
+                },
+              },
+              required: ['keywords'],
+            },
+          },
 
           // ==================== 实体管理 ====================
           {
@@ -185,6 +216,46 @@ class MemoryMCPServer {
               required: ['entity_id'],
             },
           },
+          {
+            name: 'search_entities_by_keywords',
+            description: '通过关键词搜索实体（宠物、房产、车辆、人物）。⚠️ 重要：调用此工具前，请先分析用户输入并提取核心关键词。例如用户说"我的小狗"，应提取关键词 ["小狗", "狗", "宠物", "pet"]；用户说"我的车"，应提取关键词 ["车", "汽车", "vehicle"]。建议包含同义词和相关词以提高匹配准确率。',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                keywords: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: '关键词数组，由 AI 从用户输入中提取。应包含同义词（如"车"和"汽车"）、中英文词汇（如"宠物"和"pet"）',
+                },
+                entity_type: {
+                  type: 'string',
+                  enum: ['pet', 'property', 'vehicle', 'person'],
+                  description: '可选：按实体类型过滤。如果用户明确提到类型（如"我的宠物"），应设置此参数',
+                },
+                search_fields: {
+                  type: 'array',
+                  items: {
+                    type: 'string',
+                    enum: ['name', 'attributes', 'all']
+                  },
+                  default: ['all'],
+                  description: '搜索字段范围：name=仅名称，attributes=仅属性，all=全部字段（推荐）',
+                },
+                match_mode: {
+                  type: 'string',
+                  enum: ['any', 'all'],
+                  default: 'any',
+                  description: '匹配模式：any=任一关键词匹配（推荐），all=所有关键词都匹配',
+                },
+                limit: {
+                  type: 'integer',
+                  default: 20,
+                  description: '返回结果数量限制',
+                },
+              },
+              required: ['keywords'],
+            },
+          },
 
           // ==================== 事件管理 ====================
           {
@@ -229,21 +300,27 @@ class MemoryMCPServer {
           },
           {
             name: 'search_events',
-            description: '按时间、类型、关键词搜索历史事件',
+            description: '搜索历史事件。⚠️ 重要：优先使用 keywords 参数进行语义搜索。调用前请从用户输入中提取关键词，例如"收养小狗的时间"应提取 ["收养", "小狗", "宠物"]。支持按时间范围和事件类型过滤。',
             inputSchema: {
               type: 'object',
               properties: {
+                keywords: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: '推荐参数：关键词数组，由 AI 从用户输入中提取。应包含动作词、对象词和同义词',
+                },
                 query: {
                   type: 'string',
-                  description: '搜索关键词（可选）',
+                  description: '传统参数（向后兼容）：单个搜索关键词。如果提供了 keywords，此参数将被忽略',
                 },
                 event_type: {
                   type: 'string',
-                  description: '按事件类型筛选（可选）',
+                  enum: ['purchase', 'illness', 'maintenance', 'activity', 'milestone', 'other'],
+                  description: '可选：按事件类型筛选',
                 },
                 time_range: {
                   type: 'string',
-                  description: "时间范围，如 'last_week', 'last_month', '2024-01'（可选）",
+                  description: "可选：时间范围，如 'last_week', 'last_month', '2024-01'",
                 },
                 limit: {
                   type: 'integer',
@@ -338,6 +415,13 @@ class MemoryMCPServer {
           result = await this.db.queryProfile(args.keys, args.category);
         } else if (name === 'delete_profile') {
           result = await this.db.deleteProfile(args.key);
+        } else if (name === 'search_profile_by_keywords') {
+          result = await this.db.searchProfileByKeywords(
+            args.keywords,
+            args.category,
+            args.match_mode || 'any',
+            args.limit || 20
+          );
         }
 
         // 实体管理
@@ -359,6 +443,14 @@ class MemoryMCPServer {
           result = await this.db.listEntities(args.entity_type, args.status || 'active');
         } else if (name === 'delete_entity') {
           result = await this.db.deleteEntity(args.entity_id);
+        } else if (name === 'search_entities_by_keywords') {
+          result = await this.db.searchEntitiesByKeywords(
+            args.keywords,
+            args.entity_type,
+            args.search_fields || ['all'],
+            args.match_mode || 'any',
+            args.limit || 20
+          );
         }
 
         // 事件管理
@@ -375,6 +467,7 @@ class MemoryMCPServer {
         } else if (name === 'search_events') {
           result = await this.db.searchEvents(
             args.query,
+            args.keywords,
             args.event_type,
             args.time_range,
             args.limit || 20
