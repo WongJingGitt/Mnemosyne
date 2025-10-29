@@ -1,7 +1,8 @@
-import Database from 'better-sqlite3';
-import { mkdirSync, existsSync } from 'fs';
+import initSqlJs from 'sql.js';
+import { mkdirSync, existsSync, readFileSync, writeFileSync, statSync } from 'fs';
 import { dirname, join } from 'path';
 import { homedir } from 'os';
+import { execSync } from 'child_process';
 
 /**
  * 个人记忆数据库管理类
@@ -16,15 +17,18 @@ export class MemoryDatabase {
     }
     
     this.dbPath = dbPath;
+    this.dataDir = dirname(dbPath);
     this.userId = userId;
     this.db = null;
-    this._initialize();
+    this.SQL = null;
+    this.lastModifiedTime = null;
+    this._initPromise = this._initialize();
   }
 
   /**
    * 初始化数据库连接和表结构
    */
-  _initialize() {
+  async _initialize() {
     // 确保数据库目录存在
     const dbDir = dirname(this.dbPath);
     mkdirSync(dbDir, { recursive: true });
@@ -32,17 +36,99 @@ export class MemoryDatabase {
     // 检查数据库文件是否已存在
     const dbExists = existsSync(this.dbPath);
     
-    // 创建数据库连接
-    this.db = new Database(this.dbPath);
-    this.db.pragma('journal_mode = WAL'); // 启用 WAL 模式提高性能
-
-    // 只有在数据库文件不存在时才创建表
-    if (!dbExists) {
-      console.log('Creating new database tables...');
-      this._createTables();
+    // 初始化 sql.js
+    this.SQL = await initSqlJs();
+    
+    // 创建或加载数据库
+    if (dbExists) {
+      console.log('Loading existing database:', this.dbPath);
+      const buffer = readFileSync(this.dbPath);
+      this.db = new this.SQL.Database(buffer);
+      
+      // 确保表结构是最新的（包括 deleted 字段）
+      this._ensureTablesUpToDate();
+      
+      // 初始化最后修改时间
+      const stats = statSync(this.dbPath);
+      this.lastModifiedTime = stats.mtimeMs;
     } else {
-      console.log('Using existing database:', this.dbPath);
+      console.log('Creating new database...');
+      this.db = new this.SQL.Database();
+      this._createTables();
+      this._saveDatabase();
     }
+  }
+
+  /**
+   * 保存数据库到文件
+   */
+  _saveDatabase() {
+    if (!this.db) return;
+    const data = this.db.export();
+    const buffer = Buffer.from(data);
+    writeFileSync(this.dbPath, buffer);
+    
+    // 检测文件是否发生变更，如果是则触发 Git 同步
+    this._autoSync();
+  }
+
+  /**
+   * 自动 Git 同步（简单粗暴版）
+   */
+  _autoSync() {
+    try {
+      // 获取当前文件的修改时间
+      const stats = statSync(this.dbPath);
+      const currentModifiedTime = stats.mtimeMs;
+      
+      // 如果是第一次或者文件确实发生了变化
+      if (this.lastModifiedTime !== null && currentModifiedTime !== this.lastModifiedTime) {
+        // 检查是否是 Git 仓库
+        const gitDir = join(this.dataDir, '.git');
+        if (!existsSync(gitDir)) {
+          this.lastModifiedTime = currentModifiedTime;
+          return;
+        }
+        
+        // 执行 WAL checkpoint
+        this.db.run('PRAGMA wal_checkpoint(TRUNCATE)');
+        
+        // 导出并保存数据库（确保 checkpoint 生效）
+        const data = this.db.export();
+        const buffer = Buffer.from(data);
+        writeFileSync(this.dbPath, buffer);
+        
+        // 执行 Git 同步
+        const now = new Date();
+        const dateStr = now.toISOString().replace('T', ' ').substring(0, 19);
+        
+        try {
+          execSync('git add memory.db', { cwd: this.dataDir, stdio: 'ignore' });
+          execSync(`git commit -m "Auto sync: ${dateStr}"`, { cwd: this.dataDir, stdio: 'ignore' });
+          
+          // 尝试推送（可能失败，但不影响）
+          try {
+            execSync('git push', { cwd: this.dataDir, stdio: 'ignore', timeout: 5000 });
+          } catch (pushError) {
+            // 推送失败不打印错误，静默处理
+          }
+        } catch (gitError) {
+          // Git 命令失败不打印错误，静默处理
+        }
+      }
+      
+      // 更新最后修改时间
+      this.lastModifiedTime = currentModifiedTime;
+    } catch (error) {
+      // 所有错误都静默处理，不影响主流程
+    }
+  }
+
+  /**
+   * 确保数据库已初始化
+   */
+  async _ensureInitialized() {
+    await this._initPromise;
   }
 
   /**
@@ -50,7 +136,7 @@ export class MemoryDatabase {
    */
   _createTables() {
     // 用户基础信息表
-    this.db.exec(`
+    this.db.run(`
       CREATE TABLE IF NOT EXISTS user_profile (
         user_id TEXT NOT NULL DEFAULT 'default',
         key TEXT NOT NULL,
@@ -58,12 +144,13 @@ export class MemoryDatabase {
         category TEXT,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         confidence REAL DEFAULT 1.0,
+        deleted INTEGER DEFAULT 0,
         PRIMARY KEY (user_id, key)
       )
     `);
 
     // 实体表
-    this.db.exec(`
+    this.db.run(`
       CREATE TABLE IF NOT EXISTS entities (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT NOT NULL DEFAULT 'default',
@@ -72,12 +159,13 @@ export class MemoryDatabase {
         attributes TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        status TEXT DEFAULT 'active'
+        status TEXT DEFAULT 'active',
+        deleted INTEGER DEFAULT 0
       )
     `);
 
     // 事件表
-    this.db.exec(`
+    this.db.run(`
       CREATE TABLE IF NOT EXISTS events (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT NOT NULL DEFAULT 'default',
@@ -86,12 +174,13 @@ export class MemoryDatabase {
         timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         related_entity_ids TEXT,
         metadata TEXT,
-        importance REAL DEFAULT 0.5
+        importance REAL DEFAULT 0.5,
+        deleted INTEGER DEFAULT 0
       )
     `);
 
     // 实体关系表
-    this.db.exec(`
+    this.db.run(`
       CREATE TABLE IF NOT EXISTS entity_relations (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT NOT NULL DEFAULT 'default',
@@ -99,19 +188,44 @@ export class MemoryDatabase {
         entity_id_2 INTEGER NOT NULL,
         relation_type TEXT NOT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        deleted INTEGER DEFAULT 0,
         FOREIGN KEY (entity_id_1) REFERENCES entities(id),
         FOREIGN KEY (entity_id_2) REFERENCES entities(id)
       )
     `);
 
     // 创建索引
-    this.db.exec(`
-      CREATE INDEX IF NOT EXISTS idx_entities_user_type ON entities(user_id, entity_type);
-      CREATE INDEX IF NOT EXISTS idx_events_user_time ON events(user_id, timestamp);
-      CREATE INDEX IF NOT EXISTS idx_events_entity ON events(user_id, related_entity_ids);
-    `);
+    this.db.run(`CREATE INDEX IF NOT EXISTS idx_entities_user_type ON entities(user_id, entity_type)`);
+    this.db.run(`CREATE INDEX IF NOT EXISTS idx_events_user_time ON events(user_id, timestamp)`);
+    this.db.run(`CREATE INDEX IF NOT EXISTS idx_events_entity ON events(user_id, related_entity_ids)`);
 
     console.log('Database tables created successfully');
+  }
+
+  /**
+   * 确保现有数据库表结构是最新的
+   */
+  _ensureTablesUpToDate() {
+    // 检查并添加 deleted 字段（如果不存在）
+    const tables = ['user_profile', 'entities', 'events', 'entity_relations'];
+    
+    for (const table of tables) {
+      try {
+        // 检查字段是否存在
+        const result = this.db.exec(`PRAGMA table_info(${table})`);
+        if (result.length === 0) continue;
+        
+        const columns = result[0].values.map(row => row[1]); // 第二列是字段名
+        
+        if (!columns.includes('deleted')) {
+          console.log(`Adding 'deleted' column to ${table}...`);
+          this.db.run(`ALTER TABLE ${table} ADD COLUMN deleted INTEGER DEFAULT 0`);
+          this._saveDatabase(); // 保存更改
+        }
+      } catch (e) {
+        console.error(`Error updating table ${table}:`, e.message);
+      }
+    }
   }
 
   // ==================== 用户属性管理 ====================
@@ -119,36 +233,41 @@ export class MemoryDatabase {
   /**
    * 更新用户属性
    */
-  updateProfile(key, value, category = null) {
+  async updateProfile(key, value, category = null) {
+    await this._ensureInitialized();
+    
     // 检查是否存在旧值
-    const oldRow = this.db.prepare(
-      'SELECT value FROM user_profile WHERE user_id = ? AND key = ?'
-    ).get(this.userId, key);
+    const oldRow = this.db.exec(
+      'SELECT value FROM user_profile WHERE user_id = ? AND key = ?',
+      [this.userId, key]
+    );
 
     // 插入或更新
-    const stmt = this.db.prepare(`
+    this.db.run(`
       INSERT INTO user_profile (user_id, key, value, category, updated_at)
       VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
       ON CONFLICT(user_id, key) DO UPDATE SET
         value = excluded.value,
         category = COALESCE(excluded.category, category),
         updated_at = CURRENT_TIMESTAMP
-    `);
+    `, [this.userId, key, value, category]);
 
-    stmt.run(this.userId, key, value, category);
+    this._saveDatabase();
 
     return {
       updated: true,
-      had_previous_value: oldRow !== undefined,
-      previous_value: oldRow?.value || null
+      had_previous_value: oldRow.length > 0 && oldRow[0].values.length > 0,
+      previous_value: oldRow.length > 0 && oldRow[0].values.length > 0 ? oldRow[0].values[0][0] : null
     };
   }
 
   /**
    * 查询用户属性
    */
-  queryProfile(keys = null, category = null) {
-    let sql = 'SELECT key, value, category, updated_at, confidence FROM user_profile WHERE user_id = ?';
+  async queryProfile(keys = null, category = null) {
+    await this._ensureInitialized();
+    
+    let sql = 'SELECT key, value, category, updated_at, confidence FROM user_profile WHERE user_id = ? AND deleted = 0';
     const params = [this.userId];
 
     if (keys && keys.length > 0) {
@@ -162,22 +281,45 @@ export class MemoryDatabase {
       params.push(category);
     }
 
-    const rows = this.db.prepare(sql).all(...params);
-    return rows;
+    const result = this.db.exec(sql, params);
+    
+    if (result.length === 0) return [];
+    
+    const columns = result[0].columns;
+    const values = result[0].values;
+    
+    return values.map(row => {
+      const obj = {};
+      columns.forEach((col, idx) => {
+        obj[col] = row[idx];
+      });
+      return obj;
+    });
   }
 
   /**
-   * 删除用户属性
+   * 删除用户属性（软删除）
    */
-  deleteProfile(key) {
-    const stmt = this.db.prepare(
-      'DELETE FROM user_profile WHERE user_id = ? AND key = ?'
+  async deleteProfile(key) {
+    await this._ensureInitialized();
+    
+    const result = this.db.exec(
+      'SELECT COUNT(*) as count FROM user_profile WHERE user_id = ? AND key = ? AND deleted = 0',
+      [this.userId, key]
     );
-    const result = stmt.run(this.userId, key);
+    
+    const count = result.length > 0 && result[0].values.length > 0 ? result[0].values[0][0] : 0;
+    
+    this.db.run(
+      'UPDATE user_profile SET deleted = 1, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND key = ?',
+      [this.userId, key]
+    );
+
+    this._saveDatabase();
 
     return {
-      deleted: result.changes > 0,
-      changes: result.changes
+      deleted: count > 0,
+      changes: count
     };
   }
 
@@ -186,22 +328,28 @@ export class MemoryDatabase {
   /**
    * 创建实体
    */
-  createEntity(entityType, name = null, attributes = null) {
+  async createEntity(entityType, name = null, attributes = null) {
+    await this._ensureInitialized();
+    
     const attributesJson = attributes ? JSON.stringify(attributes) : null;
     
-    const stmt = this.db.prepare(`
+    this.db.run(`
       INSERT INTO entities (user_id, entity_type, name, attributes, created_at, updated_at)
       VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-    `);
+    `, [this.userId, entityType, name, attributesJson]);
 
-    const result = stmt.run(this.userId, entityType, name, attributesJson);
-    return result.lastInsertRowid;
+    const result = this.db.exec('SELECT last_insert_rowid()');
+    this._saveDatabase();
+    
+    return result[0].values[0][0];
   }
 
   /**
    * 更新实体
    */
-  updateEntity(entityId, name = null, attributes = null, status = null) {
+  async updateEntity(entityId, name = null, attributes = null, status = null) {
+    await this._ensureInitialized();
+    
     const updates = [];
     const params = [];
 
@@ -225,22 +373,33 @@ export class MemoryDatabase {
     }
 
     updates.push('updated_at = CURRENT_TIMESTAMP');
-    params.push(this.userId, entityId);
+    
+    // 检查更新前是否存在
+    const checkResult = this.db.exec(
+      'SELECT COUNT(*) as count FROM entities WHERE user_id = ? AND id = ?',
+      [this.userId, entityId]
+    );
+    const existsBefore = checkResult.length > 0 && checkResult[0].values.length > 0 ? checkResult[0].values[0][0] : 0;
 
     const sql = `UPDATE entities SET ${updates.join(', ')} WHERE user_id = ? AND id = ?`;
-    const result = this.db.prepare(sql).run(...params);
+    params.push(this.userId, entityId);
+    
+    this.db.run(sql, params);
+    this._saveDatabase();
 
     return {
-      updated: result.changes > 0,
-      changes: result.changes
+      updated: existsBefore > 0,
+      changes: existsBefore
     };
   }
 
   /**
    * 列出实体
    */
-  listEntities(entityType = null, status = 'active') {
-    let sql = 'SELECT id, entity_type, name, attributes, created_at, updated_at, status FROM entities WHERE user_id = ?';
+  async listEntities(entityType = null, status = 'active') {
+    await this._ensureInitialized();
+    
+    let sql = 'SELECT id, entity_type, name, attributes, created_at, updated_at, status FROM entities WHERE user_id = ? AND deleted = 0';
     const params = [this.userId];
 
     if (entityType) {
@@ -255,27 +414,52 @@ export class MemoryDatabase {
 
     sql += ' ORDER BY created_at DESC';
 
-    const rows = this.db.prepare(sql).all(...params);
+    const result = this.db.exec(sql, params);
+    
+    if (result.length === 0) return [];
+    
+    const columns = result[0].columns;
+    const values = result[0].values;
     
     // 解析 JSON 属性
-    return rows.map(row => ({
-      ...row,
-      attributes: row.attributes ? JSON.parse(row.attributes) : null
-    }));
+    return values.map(row => {
+      const obj = {};
+      columns.forEach((col, idx) => {
+        obj[col] = row[idx];
+      });
+      if (obj.attributes) {
+        try {
+          obj.attributes = JSON.parse(obj.attributes);
+        } catch (e) {
+          obj.attributes = null;
+        }
+      }
+      return obj;
+    });
   }
 
   /**
    * 删除实体（软删除）
    */
-  deleteEntity(entityId) {
-    const stmt = this.db.prepare(
-      'UPDATE entities SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND id = ?'
+  async deleteEntity(entityId) {
+    await this._ensureInitialized();
+    
+    const checkResult = this.db.exec(
+      'SELECT COUNT(*) as count FROM entities WHERE user_id = ? AND id = ? AND deleted = 0',
+      [this.userId, entityId]
     );
-    const result = stmt.run('inactive', this.userId, entityId);
+    const count = checkResult.length > 0 && checkResult[0].values.length > 0 ? checkResult[0].values[0][0] : 0;
+    
+    this.db.run(
+      'UPDATE entities SET deleted = 1, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND id = ?',
+      [this.userId, entityId]
+    );
+    
+    this._saveDatabase();
 
     return {
-      deleted: result.changes > 0,
-      changes: result.changes
+      deleted: count > 0,
+      changes: count
     };
   }
 
@@ -284,17 +468,17 @@ export class MemoryDatabase {
   /**
    * 添加事件
    */
-  addEvent(eventType, description, relatedEntityIds = null, metadata = null, timestamp = null, importance = 0.5) {
+  async addEvent(eventType, description, relatedEntityIds = null, metadata = null, timestamp = null, importance = 0.5) {
+    await this._ensureInitialized();
+    
     const relatedEntityIdsJson = relatedEntityIds ? JSON.stringify(relatedEntityIds) : null;
     const metadataJson = metadata ? JSON.stringify(metadata) : null;
     const eventTimestamp = timestamp || new Date().toISOString();
 
-    const stmt = this.db.prepare(`
+    this.db.run(`
       INSERT INTO events (user_id, event_type, description, related_entity_ids, metadata, timestamp, importance)
       VALUES (?, ?, ?, ?, ?, ?, ?)
-    `);
-
-    const result = stmt.run(
+    `, [
       this.userId,
       eventType,
       description,
@@ -302,19 +486,24 @@ export class MemoryDatabase {
       metadataJson,
       eventTimestamp,
       importance
-    );
+    ]);
 
-    return result.lastInsertRowid;
+    const result = this.db.exec('SELECT last_insert_rowid()');
+    this._saveDatabase();
+    
+    return result[0].values[0][0];
   }
 
   /**
    * 搜索事件
    */
-  searchEvents(query = null, eventType = null, timeRange = null, limit = 20) {
+  async searchEvents(query = null, eventType = null, timeRange = null, limit = 20) {
+    await this._ensureInitialized();
+    
     let sql = `
       SELECT id, event_type, description, related_entity_ids, metadata, timestamp, importance
       FROM events
-      WHERE user_id = ?
+      WHERE user_id = ? AND deleted = 0
     `;
     const params = [this.userId];
 
@@ -340,25 +529,48 @@ export class MemoryDatabase {
     sql += ' ORDER BY timestamp DESC LIMIT ?';
     params.push(limit);
 
-    const rows = this.db.prepare(sql).all(...params);
+    const result = this.db.exec(sql, params);
+    
+    if (result.length === 0) return [];
+    
+    const columns = result[0].columns;
+    const values = result[0].values;
     
     // 解析 JSON 字段
-    return rows.map(row => ({
-      ...row,
-      related_entity_ids: row.related_entity_ids ? JSON.parse(row.related_entity_ids) : null,
-      metadata: row.metadata ? JSON.parse(row.metadata) : null
-    }));
+    return values.map(row => {
+      const obj = {};
+      columns.forEach((col, idx) => {
+        obj[col] = row[idx];
+      });
+      if (obj.related_entity_ids) {
+        try {
+          obj.related_entity_ids = JSON.parse(obj.related_entity_ids);
+        } catch (e) {
+          obj.related_entity_ids = null;
+        }
+      }
+      if (obj.metadata) {
+        try {
+          obj.metadata = JSON.parse(obj.metadata);
+        } catch (e) {
+          obj.metadata = null;
+        }
+      }
+      return obj;
+    });
   }
 
   /**
    * 查询实体的事件时间线
    */
-  queryEntityTimeline(entityId, limit = 10) {
+  async queryEntityTimeline(entityId, limit = 10) {
+    await this._ensureInitialized();
+    
     // SQLite 的 JSON 支持有限，使用 LIKE 匹配
     const sql = `
       SELECT id, event_type, description, related_entity_ids, metadata, timestamp, importance
       FROM events
-      WHERE user_id = ?
+      WHERE user_id = ? AND deleted = 0
         AND (
           related_entity_ids LIKE ?
           OR related_entity_ids LIKE ?
@@ -368,20 +580,66 @@ export class MemoryDatabase {
       LIMIT ?
     `;
 
-    const rows = this.db.prepare(sql).all(
+    const result = this.db.exec(sql, [
       this.userId,
       `%[${entityId},%`,   // [123, ...
       `%, ${entityId}]%`,  // ..., 123]
       `%[${entityId}]%`,   // [123]
       limit
-    );
+    ]);
+    
+    if (result.length === 0) return [];
+    
+    const columns = result[0].columns;
+    const values = result[0].values;
 
     // 解析 JSON 字段
-    return rows.map(row => ({
-      ...row,
-      related_entity_ids: row.related_entity_ids ? JSON.parse(row.related_entity_ids) : null,
-      metadata: row.metadata ? JSON.parse(row.metadata) : null
-    }));
+    return values.map(row => {
+      const obj = {};
+      columns.forEach((col, idx) => {
+        obj[col] = row[idx];
+      });
+      if (obj.related_entity_ids) {
+        try {
+          obj.related_entity_ids = JSON.parse(obj.related_entity_ids);
+        } catch (e) {
+          obj.related_entity_ids = null;
+        }
+      }
+      if (obj.metadata) {
+        try {
+          obj.metadata = JSON.parse(obj.metadata);
+        } catch (e) {
+          obj.metadata = null;
+        }
+      }
+      return obj;
+    });
+  }
+
+  /**
+   * 删除事件（软删除）
+   */
+  async deleteEvent(eventId) {
+    await this._ensureInitialized();
+    
+    const checkResult = this.db.exec(
+      'SELECT COUNT(*) as count FROM events WHERE user_id = ? AND id = ? AND deleted = 0',
+      [this.userId, eventId]
+    );
+    const count = checkResult.length > 0 && checkResult[0].values.length > 0 ? checkResult[0].values[0][0] : 0;
+    
+    this.db.run(
+      'UPDATE events SET deleted = 1 WHERE user_id = ? AND id = ?',
+      [this.userId, eventId]
+    );
+    
+    this._saveDatabase();
+
+    return {
+      deleted: count > 0,
+      changes: count
+    };
   }
 
   /**
@@ -421,6 +679,7 @@ export class MemoryDatabase {
    */
   close() {
     if (this.db) {
+      this._saveDatabase(); // 保存最后的更改
       this.db.close();
     }
   }
