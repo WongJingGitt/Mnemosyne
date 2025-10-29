@@ -10,7 +10,8 @@ Mnemosyne 是一个基于 MCP（Model Context Protocol）的个人记忆服务�
 
 - ✅ **结构清晰**：实体-事件-属性三层模型，易于理解和使用
 - ✅ **模型友好**：主流 AI 模型都能轻松调用
-- ✅ **轻量部署**：基于 SQLite，单文件存储，零外部依赖
+- ✅ **轻量部署**：基于 SQLite（纯 JS 实现），单文件存储，**零编译依赖**
+- ✅ **跨平台兼容**：无需 C++ 编译工具，支持 Windows/macOS/Linux
 - ✅ **多用户支持**：支持单用户/多用户场景
 - ✅ **数据持久化**：默认存储在用户目录，数据安全可靠
 - ✅ **远程同步**：可选的 Git 同步功能，支持跨设备数据共享
@@ -23,12 +24,14 @@ Mnemosyne 是一个基于 MCP（Model Context Protocol）的个人记忆服务�
 # 克隆或进入项目目录
 cd Mnemosyne
 
-# 安装依赖
+# 安装依赖（无需 C++ 编译工具！）
 npm install
 
 # 运行测试
 npm test
 ```
+
+**注意**：本项目使用 `sql.js`（纯 JavaScript 实现的 SQLite），无需安装 Visual Studio、Xcode 或 build-essential 等 C++ 编译工具。
 
 ### 启动服务
 
