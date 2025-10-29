@@ -272,6 +272,20 @@ class MemoryMCPServer {
               required: ['entity_id'],
             },
           },
+          {
+            name: 'delete_event',
+            description: '删除指定事件（软删除，不会真正从数据库中移除）',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                event_id: {
+                  type: 'integer',
+                  description: '要删除的事件 ID',
+                },
+              },
+              required: ['event_id'],
+            },
+          },
         ],
       };
     });
@@ -319,37 +333,37 @@ class MemoryMCPServer {
 
         // 用户属性管理
         if (name === 'update_profile') {
-          result = this.db.updateProfile(args.key, args.value, args.category);
+          result = await this.db.updateProfile(args.key, args.value, args.category);
         } else if (name === 'query_profile') {
-          result = this.db.queryProfile(args.keys, args.category);
+          result = await this.db.queryProfile(args.keys, args.category);
         } else if (name === 'delete_profile') {
-          result = this.db.deleteProfile(args.key);
+          result = await this.db.deleteProfile(args.key);
         }
 
         // 实体管理
         else if (name === 'create_entity') {
-          const entityId = this.db.createEntity(
+          const entityId = await this.db.createEntity(
             args.entity_type,
             args.name,
             args.attributes
           );
           result = { entity_id: entityId };
         } else if (name === 'update_entity') {
-          result = this.db.updateEntity(
+          result = await this.db.updateEntity(
             args.entity_id,
             args.name,
             args.attributes,
             args.status
           );
         } else if (name === 'list_entities') {
-          result = this.db.listEntities(args.entity_type, args.status || 'active');
+          result = await this.db.listEntities(args.entity_type, args.status || 'active');
         } else if (name === 'delete_entity') {
-          result = this.db.deleteEntity(args.entity_id);
+          result = await this.db.deleteEntity(args.entity_id);
         }
 
         // 事件管理
         else if (name === 'add_event') {
-          const eventId = this.db.addEvent(
+          const eventId = await this.db.addEvent(
             args.event_type,
             args.description,
             args.related_entity_ids,
@@ -359,14 +373,16 @@ class MemoryMCPServer {
           );
           result = { event_id: eventId };
         } else if (name === 'search_events') {
-          result = this.db.searchEvents(
+          result = await this.db.searchEvents(
             args.query,
             args.event_type,
             args.time_range,
             args.limit || 20
           );
         } else if (name === 'query_entity_timeline') {
-          result = this.db.queryEntityTimeline(args.entity_id, args.limit || 10);
+          result = await this.db.queryEntityTimeline(args.entity_id, args.limit || 10);
+        } else if (name === 'delete_event') {
+          result = await this.db.deleteEvent(args.event_id);
         }
 
         else {
