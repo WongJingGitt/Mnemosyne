@@ -88,6 +88,7 @@ SQLite 数据库默认存储在：
 | `update_profile` | 更新或添加用户基础信息 |
 | `query_profile` | 查询用户信息 |
 | `delete_profile` | 删除用户属性 |
+| `search_profile_by_keywords` | 🆕 通过关键词搜索用户信息 |
 
 ### 实体管理
 
@@ -97,14 +98,16 @@ SQLite 数据库默认存储在：
 | `update_entity` | 更新实体信息 |
 | `list_entities` | 列出所有实体 |
 | `delete_entity` | 删除实体（软删除） |
+| `search_entities_by_keywords` | 🆕 通过关键词搜索实体 |
 
 ### 事件管理
 
 | 工具 | 描述 |
 |------|------|
 | `add_event` | 记录新事件 |
-| `search_events` | 搜索历史事件 |
+| `search_events` | 搜索历史事件（支持关键词数组）|
 | `query_entity_timeline` | 查询实体时间线 |
+| `delete_event` | 删除事件（软删除） |
 
 ## 💡 使用示例
 
@@ -118,7 +121,33 @@ AI 调用：
 → update_profile(key="work_location", value="北京", category="basic_info")
 ```
 
-### 场景 2：宠物管理
+### 场景 2：自然语言查询（新功能）⭐
+
+```
+用户："我的公司全称是什么？"
+
+AI 分析并提取关键词：["公司", "全称"]
+
+AI 调用：
+→ search_profile_by_keywords(keywords=["公司", "全称"])
+→ 返回：{key: "workplace", value: "字节跳动", relevance_score: 1}
+
+AI 回复："您的公司全称是字节跳动。"
+```
+
+```
+用户："我的小狗叫什么名字？"
+
+AI 分析并提取关键词：["小狗", "狗", "宠物", "pet"]
+
+AI 调用：
+→ search_entities_by_keywords(keywords=["小狗", "狗", "宠物", "pet"])
+→ 返回：{name: "旺财", entity_type: "pet", relevance_score: 3}
+
+AI 回复："您的小狗叫旺财。"
+```
+
+### 场景 3：宠物管理
 
 ```
 用户："我养了只金毛叫旺财"
@@ -144,7 +173,72 @@ AI 调用：
 → 基于时间线数据回复用户
 ```
 
-## 📊 数据模型
+## � 关键词搜索功能（v1.1 新增）
+
+### 功能特性
+
+- ✅ **自然语言交互**：支持用户自然语言提问，无需记忆精确的属性键名
+- ✅ **智能匹配**：多关键词匹配，相关性自动排序
+- ✅ **灵活搜索**：支持搜索用户属性、实体、事件的各个字段
+- ✅ **向后兼容**：完全兼容现有 API，无需修改现有调用
+
+### 新增工具
+
+#### 1. search_profile_by_keywords
+通过关键词搜索用户个人信息。
+
+**参数**：
+- `keywords` (必需): 关键词数组，如 `["公司", "全称"]`
+- `category` (可选): 分类过滤（basic_info/preferences/habits）
+- `match_mode` (可选): 匹配模式（any/all），默认 any
+- `limit` (可选): 返回结果数量，默认 20
+
+**返回**：包含 `relevance_score` 和 `matched_keywords` 的结果列表
+
+#### 2. search_entities_by_keywords
+通过关键词搜索实体。
+
+**参数**：
+- `keywords` (必需): 关键词数组
+- `entity_type` (可选): 实体类型过滤
+- `search_fields` (可选): 搜索字段范围，默认 ['all']
+- `match_mode` (可选): 匹配模式，默认 any
+- `limit` (可选): 返回结果数量，默认 20
+
+**返回**：包含 `relevance_score`、`matched_keywords` 和 `matched_fields` 的结果列表
+
+#### 3. search_events（增强）
+增加了 `keywords` 参数支持，保持向后兼容。
+
+**新参数**：
+- `keywords` (推荐): 关键词数组，优先级高于 query
+
+**示例**：
+```javascript
+// 新方式（推荐）
+search_events(keywords=["收养", "小狗"])
+
+// 旧方式（仍然支持）
+search_events(query="收养")
+```
+
+### AI 使用指南
+
+⚠️ **重要**：调用关键词搜索工具时，AI 模型需要：
+
+1. **提取核心关键词**
+   - 示例：用户说"我的公司全称" → 提取 `["公司", "全称"]`
+   - 示例：用户说"我的小狗" → 提取 `["小狗", "狗", "宠物", "pet"]`
+
+2. **同义词扩展**
+   - 提高召回率：`["车"]` → `["车", "汽车", "vehicle"]`
+   - 中英文结合：`["宠物"]` → `["宠物", "pet"]`
+
+3. **意图识别**
+   - 根据用户意图选择合适的工具
+   - 设置合适的过滤条件（category, entity_type等）
+
+## �📊 数据模型
 
 ### 用户属性 (user_profile)
 - Key-Value 存储
