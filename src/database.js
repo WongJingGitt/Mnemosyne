@@ -145,6 +145,7 @@ export class MemoryDatabase {
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         confidence REAL DEFAULT 1.0,
         deleted INTEGER DEFAULT 0,
+        tags TEXT,
         PRIMARY KEY (user_id, key)
       )
     `);
@@ -160,7 +161,8 @@ export class MemoryDatabase {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         status TEXT DEFAULT 'active',
-        deleted INTEGER DEFAULT 0
+        deleted INTEGER DEFAULT 0,
+        tags TEXT
       )
     `);
 
@@ -175,7 +177,8 @@ export class MemoryDatabase {
         related_entity_ids TEXT,
         metadata TEXT,
         importance REAL DEFAULT 0.5,
-        deleted INTEGER DEFAULT 0
+        deleted INTEGER DEFAULT 0,
+        tags TEXT
       )
     `);
 
@@ -222,6 +225,13 @@ export class MemoryDatabase {
           this.db.run(`ALTER TABLE ${table} ADD COLUMN deleted INTEGER DEFAULT 0`);
           this._saveDatabase(); // 保存更改
         }
+        
+        // 添加 tags 字段（如果不存在）
+        if (!columns.includes('tags') && table !== 'entity_relations') {
+          console.error(`Adding 'tags' column to ${table}...`);
+          this.db.run(`ALTER TABLE ${table} ADD COLUMN tags TEXT`);
+          this._saveDatabase(); // 保存更改
+        }
       } catch (e) {
         console.error(`Error updating table ${table}:`, e.message);
       }
@@ -233,7 +243,7 @@ export class MemoryDatabase {
   /**
    * 更新用户属性
    */
-  async updateProfile(key, value, category = null) {
+  async updateProfile(key, value, category = null, tags = null) {
     await this._ensureInitialized();
     
     // 检查是否存在旧值
@@ -242,15 +252,19 @@ export class MemoryDatabase {
       [this.userId, key]
     );
 
+    // 处理 tags（如果是数组，转为逗号分隔的字符串）
+    const tagsStr = tags ? (Array.isArray(tags) ? tags.join(',') : tags) : null;
+
     // 插入或更新
     this.db.run(`
-      INSERT INTO user_profile (user_id, key, value, category, updated_at)
-      VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+      INSERT INTO user_profile (user_id, key, value, category, tags, updated_at)
+      VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
       ON CONFLICT(user_id, key) DO UPDATE SET
         value = excluded.value,
         category = COALESCE(excluded.category, category),
+        tags = COALESCE(excluded.tags, tags),
         updated_at = CURRENT_TIMESTAMP
-    `, [this.userId, key, value, category]);
+    `, [this.userId, key, value, category, tagsStr]);
 
     this._saveDatabase();
 
@@ -267,7 +281,7 @@ export class MemoryDatabase {
   async queryProfile(keys = null, category = null) {
     await this._ensureInitialized();
     
-    let sql = 'SELECT key, value, category, updated_at, confidence FROM user_profile WHERE user_id = ? AND deleted = 0';
+    let sql = 'SELECT key, value, category, updated_at, confidence, tags FROM user_profile WHERE user_id = ? AND deleted = 0';
     const params = [this.userId];
 
     if (keys && keys.length > 0) {
@@ -293,6 +307,10 @@ export class MemoryDatabase {
       columns.forEach((col, idx) => {
         obj[col] = row[idx];
       });
+      // 将 tags 字符串转为数组
+      if (obj.tags) {
+        obj.tags = obj.tags.split(',').map(t => t.trim()).filter(t => t);
+      }
       return obj;
     });
   }
@@ -328,15 +346,16 @@ export class MemoryDatabase {
   /**
    * 创建实体
    */
-  async createEntity(entityType, name = null, attributes = null) {
+  async createEntity(entityType, name = null, attributes = null, tags = null) {
     await this._ensureInitialized();
     
     const attributesJson = attributes ? JSON.stringify(attributes) : null;
+    const tagsStr = tags ? (Array.isArray(tags) ? tags.join(',') : tags) : null;
     
     this.db.run(`
-      INSERT INTO entities (user_id, entity_type, name, attributes, created_at, updated_at)
-      VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-    `, [this.userId, entityType, name, attributesJson]);
+      INSERT INTO entities (user_id, entity_type, name, attributes, tags, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    `, [this.userId, entityType, name, attributesJson, tagsStr]);
 
     const result = this.db.exec('SELECT last_insert_rowid()');
     this._saveDatabase();
@@ -347,7 +366,7 @@ export class MemoryDatabase {
   /**
    * 更新实体
    */
-  async updateEntity(entityId, name = null, attributes = null, status = null) {
+  async updateEntity(entityId, name = null, attributes = null, status = null, tags = null) {
     await this._ensureInitialized();
     
     const updates = [];
@@ -366,6 +385,11 @@ export class MemoryDatabase {
     if (status !== null) {
       updates.push('status = ?');
       params.push(status);
+    }
+
+    if (tags !== null) {
+      updates.push('tags = ?');
+      params.push(Array.isArray(tags) ? tags.join(',') : tags);
     }
 
     if (updates.length === 0) {
@@ -399,7 +423,7 @@ export class MemoryDatabase {
   async listEntities(entityType = null, status = 'active') {
     await this._ensureInitialized();
     
-    let sql = 'SELECT id, entity_type, name, attributes, created_at, updated_at, status FROM entities WHERE user_id = ? AND deleted = 0';
+    let sql = 'SELECT id, entity_type, name, attributes, created_at, updated_at, status, tags FROM entities WHERE user_id = ? AND deleted = 0';
     const params = [this.userId];
 
     if (entityType) {
@@ -421,7 +445,7 @@ export class MemoryDatabase {
     const columns = result[0].columns;
     const values = result[0].values;
     
-    // 解析 JSON 属性
+    // 解析 JSON 属性和 tags
     return values.map(row => {
       const obj = {};
       columns.forEach((col, idx) => {
@@ -433,6 +457,9 @@ export class MemoryDatabase {
         } catch (e) {
           obj.attributes = null;
         }
+      }
+      if (obj.tags) {
+        obj.tags = obj.tags.split(',').map(t => t.trim()).filter(t => t);
       }
       return obj;
     });
@@ -468,16 +495,17 @@ export class MemoryDatabase {
   /**
    * 添加事件
    */
-  async addEvent(eventType, description, relatedEntityIds = null, metadata = null, timestamp = null, importance = 0.5) {
+  async addEvent(eventType, description, relatedEntityIds = null, metadata = null, timestamp = null, importance = 0.5, tags = null) {
     await this._ensureInitialized();
     
     const relatedEntityIdsJson = relatedEntityIds ? JSON.stringify(relatedEntityIds) : null;
     const metadataJson = metadata ? JSON.stringify(metadata) : null;
     const eventTimestamp = timestamp || new Date().toISOString();
+    const tagsStr = tags ? (Array.isArray(tags) ? tags.join(',') : tags) : null;
 
     this.db.run(`
-      INSERT INTO events (user_id, event_type, description, related_entity_ids, metadata, timestamp, importance)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO events (user_id, event_type, description, related_entity_ids, metadata, timestamp, importance, tags)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       this.userId,
       eventType,
@@ -485,7 +513,8 @@ export class MemoryDatabase {
       relatedEntityIdsJson,
       metadataJson,
       eventTimestamp,
-      importance
+      importance,
+      tagsStr
     ]);
 
     const result = this.db.exec('SELECT last_insert_rowid()');
@@ -699,7 +728,7 @@ export class MemoryDatabase {
     // 2. 关键词匹配和评分
     const results = allProfiles
       .map(profile => {
-        const searchText = `${profile.key || ''} ${profile.value || ''}`.toLowerCase();
+        const searchText = `${profile.key || ''} ${profile.value || ''} ${(profile.tags || []).join(' ')}`.toLowerCase();
         
         let totalScore = 0;
         let matchedKeywords = [];
@@ -712,11 +741,12 @@ export class MemoryDatabase {
             // 计算关键词出现次数
             const occurrences = (searchText.match(new RegExp(kw, 'g')) || []).length;
             
-            // 字段权重：key 权重更高
+            // 字段权重：key 权重更高，tags 次之
             const keyScore = (profile.key || '').toLowerCase().includes(kw) ? occurrences * 2 : 0;
             const valueScore = (profile.value || '').toLowerCase().includes(kw) ? occurrences * 1 : 0;
+            const tagsScore = (profile.tags || []).some(tag => tag.toLowerCase().includes(kw)) ? occurrences * 3 : 0;
             
-            totalScore += keyScore + valueScore;
+            totalScore += keyScore + valueScore + tagsScore;
             matchedKeywords.push(keyword);
           }
         });
@@ -771,6 +801,7 @@ export class MemoryDatabase {
           
           let nameScore = 0;
           let attrsScore = 0;
+          let tagsScore = 0;
           
           // 搜索名称
           if (shouldSearchName && entity.name) {
@@ -790,8 +821,17 @@ export class MemoryDatabase {
             }
           }
           
-          if (nameScore > 0 || attrsScore > 0) {
-            totalScore += nameScore + attrsScore;
+          // 搜索 tags（权重最高）
+          if (entity.tags && entity.tags.length > 0) {
+            const tagsText = entity.tags.join(' ').toLowerCase();
+            if (tagsText.includes(kw)) {
+              const occurrences = (tagsText.match(new RegExp(kw, 'g')) || []).length;
+              tagsScore = occurrences * 5; // tags 权重超高
+            }
+          }
+          
+          if (nameScore > 0 || attrsScore > 0 || tagsScore > 0) {
+            totalScore += nameScore + attrsScore + tagsScore;
             matchedKeywords.push(keyword);
           }
         });
@@ -813,6 +853,9 @@ export class MemoryDatabase {
             ),
             attributes: shouldSearchAttrs && entity.attributes && keywords.some(kw => 
               JSON.stringify(entity.attributes).toLowerCase().includes(kw.toLowerCase())
+            ),
+            tags: entity.tags && keywords.some(kw =>
+              entity.tags.some(tag => tag.toLowerCase().includes(kw.toLowerCase()))
             )
           }
         };
@@ -832,7 +875,7 @@ export class MemoryDatabase {
     await this._ensureInitialized();
     
     let sql = `
-      SELECT id, event_type, description, related_entity_ids, metadata, timestamp, importance
+      SELECT id, event_type, description, related_entity_ids, metadata, timestamp, importance, tags
       FROM events
       WHERE user_id = ? AND deleted = 0
     `;
@@ -860,7 +903,7 @@ export class MemoryDatabase {
     const columns = result[0].columns;
     const values = result[0].values;
     
-    // 解析 JSON 字段
+    // 解析 JSON 字段和 tags
     let allEvents = values.map(row => {
       const obj = {};
       columns.forEach((col, idx) => {
@@ -879,6 +922,11 @@ export class MemoryDatabase {
         } catch (e) {
           obj.metadata = null;
         }
+      }
+      if (obj.tags) {
+        obj.tags = obj.tags.split(',').map(t => t.trim()).filter(t => t);
+      } else {
+        obj.tags = [];
       }
       return obj;
     });
@@ -900,6 +948,7 @@ export class MemoryDatabase {
           
           let descScore = 0;
           let metaScore = 0;
+          let tagsScore = 0;
           
           // 搜索描述
           if (event.description) {
@@ -919,8 +968,17 @@ export class MemoryDatabase {
             }
           }
           
-          if (descScore > 0 || metaScore > 0) {
-            totalScore += descScore + metaScore;
+          // 搜索 tags（权重最高）
+          if (event.tags && event.tags.length > 0) {
+            const tagsText = event.tags.join(' ').toLowerCase();
+            if (tagsText.includes(kw)) {
+              const occurrences = (tagsText.match(new RegExp(kw, 'g')) || []).length;
+              tagsScore = occurrences * 5; // tags 权重超高
+            }
+          }
+          
+          if (descScore > 0 || metaScore > 0 || tagsScore > 0) {
+            totalScore += descScore + metaScore + tagsScore;
             matchedKeywords.push(keyword);
           }
         });
@@ -939,6 +997,254 @@ export class MemoryDatabase {
       .slice(0, limit);
     
     return results;
+  }
+
+  // ==================== Tags 管理功能 ====================
+
+  /**
+   * 为用户属性添加 tags
+   * @param {string} key - 属性键名
+   * @param {string[]} tagsToAdd - 要添加的 tags
+   */
+  async addTagsToProfile(key, tagsToAdd) {
+    await this._ensureInitialized();
+    
+    // 获取现有数据
+    const result = this.db.exec(
+      'SELECT tags FROM user_profile WHERE user_id = ? AND key = ? AND deleted = 0',
+      [this.userId, key]
+    );
+    
+    if (result.length === 0 || result[0].values.length === 0) {
+      return { success: false, message: 'Profile not found' };
+    }
+    
+    // 解析现有 tags
+    const existingTagsStr = result[0].values[0][0];
+    const existingTags = existingTagsStr ? existingTagsStr.split(',').map(t => t.trim()) : [];
+    
+    // 合并 tags（去重）
+    const newTags = [...new Set([...existingTags, ...tagsToAdd])];
+    const newTagsStr = newTags.join(',');
+    
+    // 更新数据库
+    this.db.run(
+      'UPDATE user_profile SET tags = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND key = ?',
+      [newTagsStr, this.userId, key]
+    );
+    
+    this._saveDatabase();
+    
+    return {
+      success: true,
+      added: tagsToAdd.filter(t => !existingTags.includes(t)),
+      current_tags: newTags
+    };
+  }
+
+  /**
+   * 从用户属性中删除 tags
+   * @param {string} key - 属性键名
+   * @param {string[]} tagsToRemove - 要删除的 tags
+   */
+  async removeTagsFromProfile(key, tagsToRemove) {
+    await this._ensureInitialized();
+    
+    // 获取现有数据
+    const result = this.db.exec(
+      'SELECT tags FROM user_profile WHERE user_id = ? AND key = ? AND deleted = 0',
+      [this.userId, key]
+    );
+    
+    if (result.length === 0 || result[0].values.length === 0) {
+      return { success: false, message: 'Profile not found' };
+    }
+    
+    // 解析现有 tags
+    const existingTagsStr = result[0].values[0][0];
+    const existingTags = existingTagsStr ? existingTagsStr.split(',').map(t => t.trim()) : [];
+    
+    // 删除指定 tags
+    const newTags = existingTags.filter(t => !tagsToRemove.includes(t));
+    const newTagsStr = newTags.length > 0 ? newTags.join(',') : null;
+    
+    // 更新数据库
+    this.db.run(
+      'UPDATE user_profile SET tags = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND key = ?',
+      [newTagsStr, this.userId, key]
+    );
+    
+    this._saveDatabase();
+    
+    return {
+      success: true,
+      removed: tagsToRemove.filter(t => existingTags.includes(t)),
+      current_tags: newTags
+    };
+  }
+
+  /**
+   * 为实体添加 tags
+   * @param {number} entityId - 实体 ID
+   * @param {string[]} tagsToAdd - 要添加的 tags
+   */
+  async addTagsToEntity(entityId, tagsToAdd) {
+    await this._ensureInitialized();
+    
+    // 获取现有数据
+    const result = this.db.exec(
+      'SELECT tags FROM entities WHERE user_id = ? AND id = ? AND deleted = 0',
+      [this.userId, entityId]
+    );
+    
+    if (result.length === 0 || result[0].values.length === 0) {
+      return { success: false, message: 'Entity not found' };
+    }
+    
+    // 解析现有 tags
+    const existingTagsStr = result[0].values[0][0];
+    const existingTags = existingTagsStr ? existingTagsStr.split(',').map(t => t.trim()) : [];
+    
+    // 合并 tags（去重）
+    const newTags = [...new Set([...existingTags, ...tagsToAdd])];
+    const newTagsStr = newTags.join(',');
+    
+    // 更新数据库
+    this.db.run(
+      'UPDATE entities SET tags = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND id = ?',
+      [newTagsStr, this.userId, entityId]
+    );
+    
+    this._saveDatabase();
+    
+    return {
+      success: true,
+      added: tagsToAdd.filter(t => !existingTags.includes(t)),
+      current_tags: newTags
+    };
+  }
+
+  /**
+   * 从实体中删除 tags
+   * @param {number} entityId - 实体 ID
+   * @param {string[]} tagsToRemove - 要删除的 tags
+   */
+  async removeTagsFromEntity(entityId, tagsToRemove) {
+    await this._ensureInitialized();
+    
+    // 获取现有数据
+    const result = this.db.exec(
+      'SELECT tags FROM entities WHERE user_id = ? AND id = ? AND deleted = 0',
+      [this.userId, entityId]
+    );
+    
+    if (result.length === 0 || result[0].values.length === 0) {
+      return { success: false, message: 'Entity not found' };
+    }
+    
+    // 解析现有 tags
+    const existingTagsStr = result[0].values[0][0];
+    const existingTags = existingTagsStr ? existingTagsStr.split(',').map(t => t.trim()) : [];
+    
+    // 删除指定 tags
+    const newTags = existingTags.filter(t => !tagsToRemove.includes(t));
+    const newTagsStr = newTags.length > 0 ? newTags.join(',') : null;
+    
+    // 更新数据库
+    this.db.run(
+      'UPDATE entities SET tags = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND id = ?',
+      [newTagsStr, this.userId, entityId]
+    );
+    
+    this._saveDatabase();
+    
+    return {
+      success: true,
+      removed: tagsToRemove.filter(t => existingTags.includes(t)),
+      current_tags: newTags
+    };
+  }
+
+  /**
+   * 为事件添加 tags
+   * @param {number} eventId - 事件 ID
+   * @param {string[]} tagsToAdd - 要添加的 tags
+   */
+  async addTagsToEvent(eventId, tagsToAdd) {
+    await this._ensureInitialized();
+    
+    // 获取现有数据
+    const result = this.db.exec(
+      'SELECT tags FROM events WHERE user_id = ? AND id = ? AND deleted = 0',
+      [this.userId, eventId]
+    );
+    
+    if (result.length === 0 || result[0].values.length === 0) {
+      return { success: false, message: 'Event not found' };
+    }
+    
+    // 解析现有 tags
+    const existingTagsStr = result[0].values[0][0];
+    const existingTags = existingTagsStr ? existingTagsStr.split(',').map(t => t.trim()) : [];
+    
+    // 合并 tags（去重）
+    const newTags = [...new Set([...existingTags, ...tagsToAdd])];
+    const newTagsStr = newTags.join(',');
+    
+    // 更新数据库
+    this.db.run(
+      'UPDATE events SET tags = ? WHERE user_id = ? AND id = ?',
+      [newTagsStr, this.userId, eventId]
+    );
+    
+    this._saveDatabase();
+    
+    return {
+      success: true,
+      added: tagsToAdd.filter(t => !existingTags.includes(t)),
+      current_tags: newTags
+    };
+  }
+
+  /**
+   * 从事件中删除 tags
+   * @param {number} eventId - 事件 ID
+   * @param {string[]} tagsToRemove - 要删除的 tags
+   */
+  async removeTagsFromEvent(eventId, tagsToRemove) {
+    await this._ensureInitialized();
+    
+    // 获取现有数据
+    const result = this.db.exec(
+      'SELECT tags FROM events WHERE user_id = ? AND id = ? AND deleted = 0',
+      [this.userId, eventId]
+    );
+    
+    if (result.length === 0 || result[0].values.length === 0) {
+      return { success: false, message: 'Event not found' };
+    }
+    
+    // 解析现有 tags
+    const existingTagsStr = result[0].values[0][0];
+    const existingTags = existingTagsStr ? existingTagsStr.split(',').map(t => t.trim()) : [];
+    
+    // 删除指定 tags
+    const newTags = existingTags.filter(t => !tagsToRemove.includes(t));
+    const newTagsStr = newTags.length > 0 ? newTags.join(',') : null;
+    
+    // 更新数据库
+    this.db.run(
+      'UPDATE events SET tags = ? WHERE user_id = ? AND id = ?',
+      [newTagsStr, this.userId, eventId]
+    );
+    
+    this._saveDatabase();
+    
+    return {
+      success: true,
+      removed: tagsToRemove.filter(t => existingTags.includes(t)),
+      current_tags: newTags
+    };
   }
 
   /**

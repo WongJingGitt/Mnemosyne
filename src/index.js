@@ -47,7 +47,7 @@ class MemoryMCPServer {
           // ==================== 用户属性管理 ====================
           {
             name: 'update_profile',
-            description: '更新或添加用户的基础信息，如工作地点、爱好、习惯等',
+            description: '更新或添加用户的基础信息，如工作地点、爱好、习惯等。⚠️ 重要：建议为每个属性添加 tags，用于语义搜索。例如工作相关的信息应打上 ["工作", "职业", "job"] 等 tags。',
             inputSchema: {
               type: 'object',
               properties: {
@@ -63,6 +63,11 @@ class MemoryMCPServer {
                   type: 'string',
                   enum: ['basic_info', 'preferences', 'habits'],
                   description: '属性分类',
+                },
+                tags: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: '可选：语义标签数组，用于提高搜索召回率。例如 position="测试工程师" 应打上 tags=["工作", "职业", "job", "测试", "QA"]',
                 },
               },
               required: ['key', 'value'],
@@ -135,7 +140,7 @@ class MemoryMCPServer {
           // ==================== 实体管理 ====================
           {
             name: 'create_entity',
-            description: '创建新的实体，如宠物、房产、车辆、重要的人',
+            description: '创建新的实体，如宠物、房产、车辆、重要的人。⚠️ 建议添加语义 tags 以便更好地搜索。',
             inputSchema: {
               type: 'object',
               properties: {
@@ -151,6 +156,11 @@ class MemoryMCPServer {
                 attributes: {
                   type: 'object',
                   description: '实体属性，如 {"breed": "金毛", "age": 3}',
+                },
+                tags: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: '可选：语义标签。例如宠物狗应打上 ["宠物", "狗", "pet", "dog"]',
                 },
               },
               required: ['entity_type'],
@@ -178,6 +188,11 @@ class MemoryMCPServer {
                   type: 'string',
                   enum: ['active', 'inactive'],
                   description: '实体状态（可选）',
+                },
+                tags: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: '可选：更新语义标签',
                 },
               },
               required: ['entity_id'],
@@ -260,7 +275,7 @@ class MemoryMCPServer {
           // ==================== 事件管理 ====================
           {
             name: 'add_event',
-            description: '记录一个新事件，可以关联一个或多个实体',
+            description: '记录一个新事件，可以关联一个或多个实体。⚠️ 建议添加语义 tags 以便更好地搜索和关联。',
             inputSchema: {
               type: 'object',
               properties: {
@@ -293,6 +308,11 @@ class MemoryMCPServer {
                   maximum: 1,
                   default: 0.5,
                   description: '重要性评分',
+                },
+                tags: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: '可选：语义标签。例如腰疼相关事件应打上 ["健康", "疼痛", "腰", "久坐", "工作"]',
                 },
               },
               required: ['event_type', 'description'],
@@ -363,6 +383,122 @@ class MemoryMCPServer {
               required: ['event_id'],
             },
           },
+
+          // ==================== Tags 管理 ====================
+          {
+            name: 'add_tags_to_profile',
+            description: '为用户属性添加语义标签。用于补充或优化已存在的记忆，提高搜索准确性。',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                key: {
+                  type: 'string',
+                  description: '要添加 tags 的属性键名',
+                },
+                tags: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: '要添加的 tags 数组，会自动去重',
+                },
+              },
+              required: ['key', 'tags'],
+            },
+          },
+          {
+            name: 'remove_tags_from_profile',
+            description: '从用户属性中删除指定的语义标签',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                key: {
+                  type: 'string',
+                  description: '要删除 tags 的属性键名',
+                },
+                tags: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: '要删除的 tags 数组',
+                },
+              },
+              required: ['key', 'tags'],
+            },
+          },
+          {
+            name: 'add_tags_to_entity',
+            description: '为实体添加语义标签',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                entity_id: {
+                  type: 'integer',
+                  description: '实体 ID',
+                },
+                tags: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: '要添加的 tags 数组',
+                },
+              },
+              required: ['entity_id', 'tags'],
+            },
+          },
+          {
+            name: 'remove_tags_from_entity',
+            description: '从实体中删除指定的语义标签',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                entity_id: {
+                  type: 'integer',
+                  description: '实体 ID',
+                },
+                tags: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: '要删除的 tags 数组',
+                },
+              },
+              required: ['entity_id', 'tags'],
+            },
+          },
+          {
+            name: 'add_tags_to_event',
+            description: '为事件添加语义标签',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                event_id: {
+                  type: 'integer',
+                  description: '事件 ID',
+                },
+                tags: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: '要添加的 tags 数组',
+                },
+              },
+              required: ['event_id', 'tags'],
+            },
+          },
+          {
+            name: 'remove_tags_from_event',
+            description: '从事件中删除指定的语义标签',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                event_id: {
+                  type: 'integer',
+                  description: '事件 ID',
+                },
+                tags: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: '要删除的 tags 数组',
+                },
+              },
+              required: ['event_id', 'tags'],
+            },
+          },
         ],
       };
     });
@@ -410,7 +546,7 @@ class MemoryMCPServer {
 
         // 用户属性管理
         if (name === 'update_profile') {
-          result = await this.db.updateProfile(args.key, args.value, args.category);
+          result = await this.db.updateProfile(args.key, args.value, args.category, args.tags);
         } else if (name === 'query_profile') {
           result = await this.db.queryProfile(args.keys, args.category);
         } else if (name === 'delete_profile') {
@@ -429,7 +565,8 @@ class MemoryMCPServer {
           const entityId = await this.db.createEntity(
             args.entity_type,
             args.name,
-            args.attributes
+            args.attributes,
+            args.tags
           );
           result = { entity_id: entityId };
         } else if (name === 'update_entity') {
@@ -437,7 +574,8 @@ class MemoryMCPServer {
             args.entity_id,
             args.name,
             args.attributes,
-            args.status
+            args.status,
+            args.tags
           );
         } else if (name === 'list_entities') {
           result = await this.db.listEntities(args.entity_type, args.status || 'active');
@@ -461,7 +599,8 @@ class MemoryMCPServer {
             args.related_entity_ids,
             args.metadata,
             args.timestamp,
-            args.importance || 0.5
+            args.importance || 0.5,
+            args.tags
           );
           result = { event_id: eventId };
         } else if (name === 'search_events') {
@@ -476,6 +615,21 @@ class MemoryMCPServer {
           result = await this.db.queryEntityTimeline(args.entity_id, args.limit || 10);
         } else if (name === 'delete_event') {
           result = await this.db.deleteEvent(args.event_id);
+        }
+
+        // Tags 管理
+        else if (name === 'add_tags_to_profile') {
+          result = await this.db.addTagsToProfile(args.key, args.tags);
+        } else if (name === 'remove_tags_from_profile') {
+          result = await this.db.removeTagsFromProfile(args.key, args.tags);
+        } else if (name === 'add_tags_to_entity') {
+          result = await this.db.addTagsToEntity(args.entity_id, args.tags);
+        } else if (name === 'remove_tags_from_entity') {
+          result = await this.db.removeTagsFromEntity(args.entity_id, args.tags);
+        } else if (name === 'add_tags_to_event') {
+          result = await this.db.addTagsToEvent(args.event_id, args.tags);
+        } else if (name === 'remove_tags_from_event') {
+          result = await this.db.removeTagsFromEvent(args.event_id, args.tags);
         }
 
         else {
