@@ -17,11 +17,16 @@
     "sync:pull": "node scripts/sync_db.js --pull",
     "sync:push": "node scripts/sync_db.js --push"
   },
-  "keywords": ["mcp", "memory", "sqlite", "personal-assistant"],
+  "keywords": [
+    "mcp",
+    "memory",
+    "sqlite",
+    "personal-assistant"
+  ],
   "author": "",
   "license": "ISC",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",
-    "better-sqlite3": "^11.7.0"
+    "sql.js": "^1.13.0"
   }
 }
