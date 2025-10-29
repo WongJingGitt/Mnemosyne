@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 
 import { execSync } from 'child_process';
-import { existsSync, writeFileSync } from 'fs';
+import { existsSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { homedir, hostname } from 'os';
-import Database from 'better-sqlite3';
+import initSqlJs from 'sql.js';
 
 const DATA_DIR = join(homedir(), '.mnemosyne');
 const DB_FILE = 'memory.db';
@@ -12,15 +12,29 @@ const DB_PATH = join(DATA_DIR, DB_FILE);
 
 /**
  * 执行 SQLite checkpoint（将 WAL 文件的内容合并到主数据库）
+ * 使用 sql.js 实现
  */
-function checkpointDatabase() {
+async function checkpointDatabase() {
   if (!existsSync(DB_PATH)) {
     return; // 数据库文件不存在，跳过
   }
   
   try {
-    const db = new Database(DB_PATH);
-    db.pragma('wal_checkpoint(TRUNCATE)');
+    // 初始化 sql.js
+    const SQL = await initSqlJs();
+    
+    // 加载数据库
+    const buffer = readFileSync(DB_PATH);
+    const db = new SQL.Database(buffer);
+    
+    // 执行 WAL checkpoint
+    db.run('PRAGMA wal_checkpoint(TRUNCATE)');
+    
+    // 保存数据库（这会确保所有更改都写入主文件）
+    const data = db.export();
+    const newBuffer = Buffer.from(data);
+    writeFileSync(DB_PATH, newBuffer);
+    
     db.close();
     console.log('   ✓ 数据库 WAL checkpoint 完成');
   } catch (error) {
@@ -115,12 +129,12 @@ Thumbs.db
     
     gitCommand('git commit -m "Initial commit: Mnemosyne memory database"');
     
-    // 设置默认分支名称为 master
+    // 设置默认分支名称为 main
     try {
-      gitCommand('git branch -M master');
-      console.log('   ✓ 默认分支设置为 master');
+      gitCommand('git branch -M main');
+      console.log('   ✓ 默认分支设置为 main');
     } catch (error) {
-      console.log('   ℹ️  分支已是 master');
+      console.log('   ℹ️  分支已是 main');
     }
     
     // 4. 提示下一步操作
@@ -199,9 +213,9 @@ function setRemote(remoteUrl) {
  */
 function getCurrentBranch() {
   try {
-    return gitCommand('git branch --show-current').trim() || 'master';
+    return gitCommand('git branch --show-current').trim() || 'main';
   } catch {
-    return 'master';
+    return 'main';
   }
 }
 
@@ -254,7 +268,7 @@ async function syncDatabase(options = {}) {
       console.log('\n📤 提交并推送本地更改...');
       
       // 执行 WAL checkpoint，确保所有更改都写入主数据库文件
-      checkpointDatabase();
+      await checkpointDatabase();
       
       try {
         // 添加数据库文件（使用 -f 强制添加，即使之前未跟踪）
@@ -267,13 +281,7 @@ async function syncDatabase(options = {}) {
         
         // 尝试提交（如果有更改）
         const now = new Date();
-        const year = now.getFullYear();
-        const month = String(now.getMonth() + 1).padStart(2, '0');
-        const day = String(now.getDate()).padStart(2, '0');
-        const hours = String(now.getHours()).padStart(2, '0');
-        const minutes = String(now.getMinutes()).padStart(2, '0');
-        const seconds = String(now.getSeconds()).padStart(2, '0');
-        const dateStr = `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+        const dateStr = now.toLocaleString().replace(/\//g, '-');
         
         try {
           gitCommand(`git commit -m "Update: ${dateStr}"`);
@@ -326,7 +334,7 @@ async function syncDatabase(options = {}) {
       console.log('3. 解决冲突后执行：');
       console.log('   git add memory.db');
       console.log('   git rebase --continue');
-      console.log('   git push origin master');
+      console.log('   git push origin main');
       console.log('\n或者使用强制同步（会覆盖本地更改）：');
       console.log('   npm run sync -- --force\n');
     }
