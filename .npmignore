@@ -1,0 +1,40 @@
+# 测试文件
+tests/
+*.test.js
+*.test.db
+test_memory.db
+
+# 开发配置
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 环境文件
+.env
+.env.local
+
+# 用户数据目录
+.mnemosyne/
+
+# Git
+.git/
+.gitignore
+
+# 日志
+*.log
+npm-debug.log*
+
+# OS 文件
+.DS_Store
+Thumbs.db
+
+# 临时文件
+*.tmp
+
+# 其他文档（只保留主要 README）
+README_DESIGN.md
+README_PROJECT.md
+
+# 配置文件示例（如果有的话）
+config.json

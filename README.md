@@ -1,5 +1,8 @@
 # Mnemosyne
 
+[![npm version](https://badge.fury.io/js/@jinggit.wong%2Fmnemosyne.svg)](https://www.npmjs.com/package/@jinggit.wong/mnemosyne)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 > 个人记忆 MCP Server - 基于 Model Context Protocol 的长期记忆管理服务
 
 ## 🎯 项目概述
@@ -15,13 +18,51 @@ Mnemosyne 是一个基于 MCP（Model Context Protocol）的个人记忆服务�
 - ✅ **多用户支持**：支持单用户/多用户场景
 - ✅ **数据持久化**：默认存储在用户目录，数据安全可靠
 - ✅ **远程同步**：可选的 Git 同步功能，支持跨设备数据共享
+- ✅ **一键部署**：支持 npx 直接运行，无需手动安装
 
 ## 🚀 快速开始
 
-### 安装
+### 方式一：使用 npx（推荐）
+
+**最简单的方式！** 直接在 Claude Desktop 配置中使用 npx，无需手动安装：
+
+编辑 Claude Desktop 配置文件：
+- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+
+添加以下配置：
+
+```json
+{
+  "mcpServers": {
+    "mnemosyne": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@jinggit.wong/mnemosyne"
+      ]
+    }
+  }
+}
+```
+
+重启 Claude Desktop 即可使用！✨
+
+### 方式二：全局安装
 
 ```bash
-# 克隆或进入项目目录
+# 从 npm 安装
+npm install -g @jinggit.wong/mnemosyne
+
+# 运行
+mnemosyne
+```
+
+### 方式三：从源码安装
+
+```bash
+# 克隆仓库
+git clone https://github.com/WongJingGitt/Mnemosyne.git
 cd Mnemosyne
 
 # 安装依赖（无需 C++ 编译工具！）
@@ -29,40 +70,39 @@ npm install
 
 # 运行测试
 npm test
+
+# 启动服务
+npm start
 ```
 
 **注意**：本项目使用 `sql.js`（纯 JavaScript 实现的 SQLite），无需安装 Visual Studio、Xcode 或 build-essential 等 C++ 编译工具。
 
-### 启动服务
+### Claude Desktop 集成配置
 
-```bash
-# 使用默认配置启动
-npm start
-
-# 或指定自定义参数
-node src/index.js --db-path /custom/path/memory.db --user-id your_user_id
-```
-
-### 与 Claude Desktop 集成
-
-编辑 Claude Desktop 配置文件：
-- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
-- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
-
-添加以下配置：
+如果使用全局安装或源码方式，配置如下：
 
 ```json
 {
   "mcpServers": {
-    "personal-memory": {
+    "mnemosyne": {
+      "command": "mnemosyne"
+    }
+  }
+}
+```
+
+或指定源码路径：
+
+```json
+{
+  "mcpServers": {
+    "mnemosyne": {
       "command": "node",
       "args": ["D:\\Project\\Mnemosyne\\src\\index.js"]
     }
   }
 }
 ```
-
-重启 Claude Desktop 即可使用。
 
 ## 📁 数据存储
 

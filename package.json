@@ -1,5 +1,5 @@
 {
-  "name": "mnemosyne",
+  "name": "@jinggit.wong/mnemosyne",
   "version": "1.0.0",
   "description": "Personal Memory MCP Server - 基于 MCP 协议的长期记忆服务",
   "type": "module",
@@ -21,12 +21,34 @@
     "mcp",
     "memory",
     "sqlite",
-    "personal-assistant"
+    "personal-assistant",
+    "model-context-protocol",
+    "ai-assistant",
+    "claude",
+    "long-term-memory"
   ],
-  "author": "",
-  "license": "ISC",
+  "author": "WongJingGit <https://github.com/WongJingGitt>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/WongJingGitt/Mnemosyne.git"
+  },
+  "homepage": "https://github.com/WongJingGitt/Mnemosyne#readme",
+  "bugs": {
+    "url": "https://github.com/WongJingGitt/Mnemosyne/issues"
+  },
+  "files": [
+    "src/",
+    "scripts/",
+    "README.md",
+    "README_USAGE.md",
+    "LICENSE"
+  ],
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",
     "sql.js": "^1.13.0"
+  },
+  "engines": {
+    "node": ">=16.0.0"
   }
 }
