@@ -178,7 +178,8 @@ export class MemoryDatabase {
         metadata TEXT,
         importance REAL DEFAULT 0.5,
         deleted INTEGER DEFAULT 0,
-        tags TEXT
+        tags TEXT,
+        parent_event_id TEXT
       )
     `);
 
@@ -190,6 +191,7 @@ export class MemoryDatabase {
         entity_id_1 INTEGER NOT NULL,
         entity_id_2 INTEGER NOT NULL,
         relation_type TEXT NOT NULL,
+        metadata TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         deleted INTEGER DEFAULT 0,
         FOREIGN KEY (entity_id_1) REFERENCES entities(id),
@@ -209,7 +211,7 @@ export class MemoryDatabase {
    * 确保现有数据库表结构是最新的
    */
   _ensureTablesUpToDate() {
-    // 检查并添加 deleted 字段（如果不存在）
+    // 检查并添加字段
     const tables = ['user_profile', 'entities', 'events', 'entity_relations'];
     
     for (const table of tables) {
@@ -220,17 +222,32 @@ export class MemoryDatabase {
         
         const columns = result[0].values.map(row => row[1]); // 第二列是字段名
         
+        // 添加 deleted 字段
         if (!columns.includes('deleted')) {
           console.error(`Adding 'deleted' column to ${table}...`);
           this.db.run(`ALTER TABLE ${table} ADD COLUMN deleted INTEGER DEFAULT 0`);
-          this._saveDatabase(); // 保存更改
+          this._saveDatabase();
         }
         
-        // 添加 tags 字段（如果不存在）
+        // 添加 tags 字段（entity_relations 不需要）
         if (!columns.includes('tags') && table !== 'entity_relations') {
           console.error(`Adding 'tags' column to ${table}...`);
           this.db.run(`ALTER TABLE ${table} ADD COLUMN tags TEXT`);
-          this._saveDatabase(); // 保存更改
+          this._saveDatabase();
+        }
+        
+        // 为 events 表添加 parent_event_id 字段
+        if (table === 'events' && !columns.includes('parent_event_id')) {
+          console.error(`Adding 'parent_event_id' column to events...`);
+          this.db.run(`ALTER TABLE events ADD COLUMN parent_event_id TEXT`);
+          this._saveDatabase();
+        }
+        
+        // 为 entity_relations 表添加 metadata 字段
+        if (table === 'entity_relations' && !columns.includes('metadata')) {
+          console.error(`Adding 'metadata' column to entity_relations...`);
+          this.db.run(`ALTER TABLE entity_relations ADD COLUMN metadata TEXT`);
+          this._saveDatabase();
         }
       } catch (e) {
         console.error(`Error updating table ${table}:`, e.message);
@@ -420,20 +437,28 @@ export class MemoryDatabase {
   /**
    * 列出实体
    */
-  async listEntities(entityType = null, status = 'active') {
+  async listEntities(entityType = null, status = 'active', entityIds = null) {
     await this._ensureInitialized();
     
     let sql = 'SELECT id, entity_type, name, attributes, created_at, updated_at, status, tags FROM entities WHERE user_id = ? AND deleted = 0';
     const params = [this.userId];
 
-    if (entityType) {
-      sql += ' AND entity_type = ?';
-      params.push(entityType);
-    }
+    // 如果提供了 entityIds，优先使用 ID 查询，忽略其他过滤条件
+    if (entityIds && Array.isArray(entityIds) && entityIds.length > 0) {
+      const placeholders = entityIds.map(() => '?').join(',');
+      sql += ` AND id IN (${placeholders})`;
+      params.push(...entityIds);
+    } else {
+      // 没有 entityIds 时才应用其他过滤条件
+      if (entityType) {
+        sql += ' AND entity_type = ?';
+        params.push(entityType);
+      }
 
-    if (status && status !== 'all') {
-      sql += ' AND status = ?';
-      params.push(status);
+      if (status && status !== 'all') {
+        sql += ' AND status = ?';
+        params.push(status);
+      }
     }
 
     sql += ' ORDER BY created_at DESC';
@@ -490,22 +515,111 @@ export class MemoryDatabase {
     };
   }
 
+  // ==================== 实体关系管理 ====================
+
+  /**
+   * 创建实体关系
+   */
+  async createRelation(entityId1, entityId2, relationType, metadata = null) {
+    await this._ensureInitialized();
+    
+    const metadataJson = metadata ? JSON.stringify(metadata) : null;
+    
+    this.db.run(`
+      INSERT INTO entity_relations (user_id, entity_id_1, entity_id_2, relation_type, metadata)
+      VALUES (?, ?, ?, ?, ?)
+    `, [this.userId, entityId1, entityId2, relationType, metadataJson]);
+
+    const result = this.db.exec('SELECT last_insert_rowid()');
+    this._saveDatabase();
+    
+    return result[0].values[0][0];
+  }
+
+  /**
+   * 查询实体关系
+   */
+  async getEntityRelations(entityId, relationType = null) {
+    await this._ensureInitialized();
+    
+    let sql = `
+      SELECT id, entity_id_1, entity_id_2, relation_type, metadata, created_at
+      FROM entity_relations
+      WHERE user_id = ? AND deleted = 0 AND (entity_id_1 = ? OR entity_id_2 = ?)
+    `;
+    const params = [this.userId, entityId, entityId];
+
+    if (relationType) {
+      sql += ' AND relation_type = ?';
+      params.push(relationType);
+    }
+
+    const result = this.db.exec(sql, params);
+    
+    if (result.length === 0) return [];
+    
+    const columns = result[0].columns;
+    const values = result[0].values;
+    
+    return values.map(row => {
+      const obj = {};
+      columns.forEach((col, idx) => {
+        obj[col] = row[idx];
+      });
+      // 解析 metadata
+      if (obj.metadata) {
+        try {
+          obj.metadata = JSON.parse(obj.metadata);
+        } catch (e) {
+          obj.metadata = null;
+        }
+      }
+      return obj;
+    });
+  }
+
+  /**
+   * 删除实体关系（软删除）
+   */
+  async deleteRelation(relationId) {
+    await this._ensureInitialized();
+    
+    const checkResult = this.db.exec(
+      'SELECT COUNT(*) as count FROM entity_relations WHERE user_id = ? AND id = ? AND deleted = 0',
+      [this.userId, relationId]
+    );
+    const count = checkResult.length > 0 && checkResult[0].values.length > 0 ? checkResult[0].values[0][0] : 0;
+    
+    this.db.run(
+      'UPDATE entity_relations SET deleted = 1 WHERE user_id = ? AND id = ?',
+      [this.userId, relationId]
+    );
+    
+    this._saveDatabase();
+
+    return {
+      deleted: count > 0,
+      changes: count
+    };
+  }
+
   // ==================== 事件管理 ====================
 
   /**
    * 添加事件
    */
-  async addEvent(eventType, description, relatedEntityIds = null, metadata = null, timestamp = null, importance = 0.5, tags = null) {
+  async addEvent(eventType, description, relatedEntityIds = null, metadata = null, timestamp = null, importance = 0.5, tags = null, parentEventId = null) {
     await this._ensureInitialized();
     
     const relatedEntityIdsJson = relatedEntityIds ? JSON.stringify(relatedEntityIds) : null;
     const metadataJson = metadata ? JSON.stringify(metadata) : null;
     const eventTimestamp = timestamp || new Date().toISOString();
     const tagsStr = tags ? (Array.isArray(tags) ? tags.join(',') : tags) : null;
+    const parentEventIdStr = parentEventId || null;
 
     this.db.run(`
-      INSERT INTO events (user_id, event_type, description, related_entity_ids, metadata, timestamp, importance, tags)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO events (user_id, event_type, description, related_entity_ids, metadata, timestamp, importance, tags, parent_event_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       this.userId,
       eventType,
@@ -514,7 +628,8 @@ export class MemoryDatabase {
       metadataJson,
       eventTimestamp,
       importance,
-      tagsStr
+      tagsStr,
+      parentEventIdStr
     ]);
 
     const result = this.db.exec('SELECT last_insert_rowid()');
@@ -527,8 +642,54 @@ export class MemoryDatabase {
    * 搜索事件
    * 支持 keywords 数组参数（优先）和传统的 query 字符串参数（向后兼容）
    */
-  async searchEvents(query = null, keywords = null, eventType = null, timeRange = null, limit = 20) {
+  async searchEvents(query = null, keywords = null, eventType = null, timeRange = null, limit = 20, eventIds = null) {
     await this._ensureInitialized();
+    
+    // 如果提供了 eventIds，优先使用 ID 查询，忽略其他过滤条件
+    if (eventIds && Array.isArray(eventIds) && eventIds.length > 0) {
+      let sql = `
+        SELECT id, event_type, description, related_entity_ids, metadata, timestamp, importance, tags, parent_event_id
+        FROM events
+        WHERE user_id = ? AND deleted = 0
+      `;
+      const params = [this.userId];
+      
+      const placeholders = eventIds.map(() => '?').join(',');
+      sql += ` AND id IN (${placeholders})`;
+      params.push(...eventIds);
+      
+      sql += ' ORDER BY timestamp DESC';
+      
+      const result = this.db.exec(sql, params);
+      
+      if (result.length === 0) return [];
+      
+      const columns = result[0].columns;
+      const values = result[0].values;
+      
+      // 解析 JSON 字段
+      return values.map(row => {
+        const obj = {};
+        columns.forEach((col, idx) => {
+          obj[col] = row[idx];
+        });
+        if (obj.related_entity_ids) {
+          try {
+            obj.related_entity_ids = JSON.parse(obj.related_entity_ids);
+          } catch (e) {
+            obj.related_entity_ids = null;
+          }
+        }
+        if (obj.metadata) {
+          try {
+            obj.metadata = JSON.parse(obj.metadata);
+          } catch (e) {
+            obj.metadata = null;
+          }
+        }
+        return obj;
+      });
+    }
     
     // 如果提供了 keywords，使用增强的关键词搜索
     if (keywords && Array.isArray(keywords) && keywords.length > 0) {
@@ -537,7 +698,7 @@ export class MemoryDatabase {
     
     // 否则使用传统的查询方式（向后兼容）
     let sql = `
-      SELECT id, event_type, description, related_entity_ids, metadata, timestamp, importance
+      SELECT id, event_type, description, related_entity_ids, metadata, timestamp, importance, tags, parent_event_id
       FROM events
       WHERE user_id = ? AND deleted = 0
     `;
@@ -875,7 +1036,7 @@ export class MemoryDatabase {
     await this._ensureInitialized();
     
     let sql = `
-      SELECT id, event_type, description, related_entity_ids, metadata, timestamp, importance, tags
+      SELECT id, event_type, description, related_entity_ids, metadata, timestamp, importance, tags, parent_event_id
       FROM events
       WHERE user_id = ? AND deleted = 0
     `;

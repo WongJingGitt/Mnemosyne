@@ -200,19 +200,24 @@ class MemoryMCPServer {
           },
           {
             name: 'list_entities',
-            description: '列出用户的所有实体，可按类型和状态筛选',
+            description: '列出用户的所有实体，可按类型和状态筛选，或通过 entity_ids 直接查询指定实体',
             inputSchema: {
               type: 'object',
               properties: {
                 entity_type: {
                   type: 'string',
-                  description: '按类型筛选（可选）',
+                  description: '按类型筛选（可选）。注意：如果提供了 entity_ids，此参数将被忽略',
                 },
                 status: {
                   type: 'string',
                   enum: ['active', 'inactive', 'all'],
                   default: 'active',
-                  description: '按状态筛选',
+                  description: '按状态筛选。注意：如果提供了 entity_ids，此参数将被忽略',
+                },
+                entity_ids: {
+                  type: 'array',
+                  items: { type: 'integer' },
+                  description: '可选：直接通过 ID 数组查询指定实体，例如 [1, 2, 3]。当提供此参数时，entity_type 和 status 参数将被忽略',
                 },
               },
             },
@@ -314,38 +319,47 @@ class MemoryMCPServer {
                   items: { type: 'string' },
                   description: '可选：语义标签。例如腰疼相关事件应打上 ["健康", "疼痛", "腰", "久坐", "工作"]',
                 },
+                parent_event_id: {
+                  type: 'string',
+                  description: '可选：父事件ID，用逗号分隔多个父事件。例如 "123" 或 "123,456"。用于关联事件链，如订单->交付',
+                },
               },
               required: ['event_type', 'description'],
             },
           },
           {
             name: 'search_events',
-            description: '搜索历史事件。⚠️ 重要：优先使用 keywords 参数进行语义搜索。调用前请从用户输入中提取关键词，例如"收养小狗的时间"应提取 ["收养", "小狗", "宠物"]。支持按时间范围和事件类型过滤。',
+            description: '搜索历史事件。⚠️ 重要：优先使用 keywords 参数进行语义搜索。调用前请从用户输入中提取关键词，例如"收养小狗的时间"应提取 ["收养", "小狗", "宠物"]。支持按时间范围和事件类型过滤，或通过 event_ids 直接查询指定事件。',
             inputSchema: {
               type: 'object',
               properties: {
                 keywords: {
                   type: 'array',
                   items: { type: 'string' },
-                  description: '推荐参数：关键词数组，由 AI 从用户输入中提取。应包含动作词、对象词和同义词',
+                  description: '推荐参数：关键词数组，由 AI 从用户输入中提取。应包含动作词、对象词和同义词。注意：如果提供了 event_ids，此参数将被忽略',
                 },
                 query: {
                   type: 'string',
-                  description: '传统参数（向后兼容）：单个搜索关键词。如果提供了 keywords，此参数将被忽略',
+                  description: '传统参数（向后兼容）：单个搜索关键词。如果提供了 keywords 或 event_ids，此参数将被忽略',
                 },
                 event_type: {
                   type: 'string',
                   enum: ['purchase', 'illness', 'maintenance', 'activity', 'milestone', 'other'],
-                  description: '可选：按事件类型筛选',
+                  description: '可选：按事件类型筛选。注意：如果提供了 event_ids，此参数将被忽略',
                 },
                 time_range: {
                   type: 'string',
-                  description: "可选：时间范围，如 'last_week', 'last_month', '2024-01'",
+                  description: "可选：时间范围，如 'last_week', 'last_month', '2024-01'。注意：如果提供了 event_ids，此参数将被忽略",
                 },
                 limit: {
                   type: 'integer',
                   default: 20,
-                  description: '返回结果数量限制',
+                  description: '返回结果数量限制。注意：如果提供了 event_ids，此参数将被忽略',
+                },
+                event_ids: {
+                  type: 'array',
+                  items: { type: 'integer' },
+                  description: '可选：直接通过 ID 数组查询指定事件，例如 [1, 2, 3]。当提供此参数时，所有其他筛选参数将被忽略',
                 },
               },
             },
@@ -381,6 +395,66 @@ class MemoryMCPServer {
                 },
               },
               required: ['event_id'],
+            },
+          },
+
+          // ==================== 实体关系管理 ====================
+          {
+            name: 'create_entity_relation',
+            description: '建立两个实体之间的关系。例如：张三和李四是朋友、旺财属于张三、汽车停放在车库等',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                entity_id_1: {
+                  type: 'integer',
+                  description: '第一个实体的 ID',
+                },
+                entity_id_2: {
+                  type: 'integer',
+                  description: '第二个实体的 ID',
+                },
+                relation_type: {
+                  type: 'string',
+                  description: '关系类型，如：friend（朋友）、colleague（同事）、family（家人）、owns（拥有）、lives_at（居住在）、works_at（工作于）等',
+                },
+                metadata: {
+                  type: 'object',
+                  description: '可选：关系的额外信息，如 {"since": "2020", "closeness": "close"}',
+                },
+              },
+              required: ['entity_id_1', 'entity_id_2', 'relation_type'],
+            },
+          },
+          {
+            name: 'query_entity_relations',
+            description: '查询某个实体的所有关系。例如查询"张三的所有朋友"、"旺财的主人"等',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                entity_id: {
+                  type: 'integer',
+                  description: '要查询关系的实体 ID',
+                },
+                relation_type: {
+                  type: 'string',
+                  description: '可选：只查询特定类型的关系，如 "friend"',
+                },
+              },
+              required: ['entity_id'],
+            },
+          },
+          {
+            name: 'delete_entity_relation',
+            description: '删除两个实体之间的关系（软删除）',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                relation_id: {
+                  type: 'integer',
+                  description: '要删除的关系 ID（从 query_entity_relations 获取）',
+                },
+              },
+              required: ['relation_id'],
             },
           },
 
@@ -578,7 +652,7 @@ class MemoryMCPServer {
             args.tags
           );
         } else if (name === 'list_entities') {
-          result = await this.db.listEntities(args.entity_type, args.status || 'active');
+          result = await this.db.listEntities(args.entity_type, args.status || 'active', args.entity_ids);
         } else if (name === 'delete_entity') {
           result = await this.db.deleteEntity(args.entity_id);
         } else if (name === 'search_entities_by_keywords') {
@@ -600,7 +674,8 @@ class MemoryMCPServer {
             args.metadata,
             args.timestamp,
             args.importance || 0.5,
-            args.tags
+            args.tags,
+            args.parent_event_id
           );
           result = { event_id: eventId };
         } else if (name === 'search_events') {
@@ -609,12 +684,28 @@ class MemoryMCPServer {
             args.keywords,
             args.event_type,
             args.time_range,
-            args.limit || 20
+            args.limit || 20,
+            args.event_ids
           );
         } else if (name === 'query_entity_timeline') {
           result = await this.db.queryEntityTimeline(args.entity_id, args.limit || 10);
         } else if (name === 'delete_event') {
           result = await this.db.deleteEvent(args.event_id);
+        }
+
+        // 实体关系管理
+        else if (name === 'create_entity_relation') {
+          const relationId = await this.db.createRelation(
+            args.entity_id_1,
+            args.entity_id_2,
+            args.relation_type,
+            args.metadata
+          );
+          result = { relation_id: relationId };
+        } else if (name === 'query_entity_relations') {
+          result = await this.db.getEntityRelations(args.entity_id, args.relation_type);
+        } else if (name === 'delete_entity_relation') {
+          result = await this.db.deleteRelation(args.relation_id);
         }
 
         // Tags 管理
